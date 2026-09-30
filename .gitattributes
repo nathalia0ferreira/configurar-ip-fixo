@@ -1,0 +1,3 @@
+# O .bat fica gravado exatamente como está (CRLF), para funcionar no cmd
+# mesmo quando baixado direto pelo site do GitHub.
+*.bat -text
