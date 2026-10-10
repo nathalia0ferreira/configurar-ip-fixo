@@ -48,3 +48,10 @@ Antes de aplicar, exibe um **resumo** com todas as opções:
 ## Licença
 
 [MIT](LICENSE)
+
+## Contribuindo
+
+As mensagens de commit deste projeto seguem o padrão
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+Veja [CONTRIBUTING.md](CONTRIBUTING.md) para os tipos, escopos e exemplos
+usados aqui.
