@@ -1,0 +1,47 @@
+#!/bin/sh
+# Valida se a mensagem de commit segue o padrao Conventional Commits.
+# Ativar com: git config core.hooksPath .githooks
+# Referencia: https://www.conventionalcommits.org/en/v1.0.0/
+
+msg_file="$1"
+subject="$(head -n 1 "$msg_file")"
+
+# Ignora merges e revert gerado automaticamente pelo git revert.
+case "$subject" in
+    "Merge "*|"Revert \""*)
+        exit 0
+        ;;
+esac
+
+types="feat|fix|refactor|perf|docs|test|style|build|ci|chore|revert"
+pattern="^(${types})(\([a-z0-9_./-]+\))?!?: .{1,88}$"
+
+if ! printf '%s' "$subject" | grep -Eq "$pattern"; then
+    echo ""
+    echo "Mensagem de commit fora do padrao Conventional Commits:"
+    echo "  \"$subject\""
+    echo ""
+    echo "Formato esperado:"
+    echo "  <tipo>[escopo opcional][!]: <descricao>"
+    echo ""
+    echo "Tipos aceitos: feat, fix, refactor, perf, docs, test, style, build, ci, chore, revert"
+    echo "Veja CONTRIBUTING.md para a lista de escopos e exemplos."
+    exit 1
+fi
+
+known_scopes="admin conexao ip dns secundarios resumo aplicar validacao script readme contributing license hooks"
+scope="$(printf '%s' "$subject" | sed -nE 's/^[a-z]+\(([a-z0-9_./-]+)\)!?:.*/\1/p')"
+
+if [ -n "$scope" ]; then
+    match=0
+    for known in $known_scopes; do
+        [ "$scope" = "$known" ] && match=1
+    done
+    if [ "$match" -eq 0 ]; then
+        echo ""
+        echo "Aviso: escopo \"$scope\" nao esta na lista usada pelo projeto (CONTRIBUTING.md)."
+        echo "O commit nao foi bloqueado, apenas confira se nao existe um escopo equivalente."
+    fi
+fi
+
+exit 0

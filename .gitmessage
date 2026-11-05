@@ -1,0 +1,17 @@
+# <tipo>[escopo opcional][!]: <descrição curta, sem ponto final>
+#
+# [corpo opcional — explique o quê e, principalmente, por quê]
+#
+# [rodapés opcionais — ex.: BREAKING CHANGE: ...]
+#
+# Tipos: feat, fix, refactor, perf, docs, test, style, build, ci, chore, revert
+# Escopos deste projeto: admin, conexao, ip, dns, secundarios, resumo,
+#   aplicar, validacao, script, readme, contributing, license, hooks
+#
+# Exemplo:
+#   fix(aplicar): restaura DHCP tambem quando a adicao do IP extra falha
+#
+# Use "!" apos o tipo/escopo (ou o rodape "BREAKING CHANGE:") somente
+# quando a mudanca quebra algo que ja funcionava.
+#
+# Guia completo: CONTRIBUTING.md

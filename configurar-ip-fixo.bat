@@ -1,30 +1,63 @@
 @echo off
 title Configurar IP Fixo - Sistema Facial
 
-:: Captura do caractere ESC para usar cores
-for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1) do rem"') do set "ESC=%%b"
-setlocal EnableDelayedExpansion
-set "AM=%ESC%[93m"
-set "VD=%ESC%[92m"
-set "VM=%ESC%[91m"
-set "CI=%ESC%[96m"
-set "RS=%ESC%[0m"
+:: ============================================================
+:: Descobre a versao do Windows
+::   XP = 5.x | Vista/7/8 = 6.x | 10 e 11 = 10.x
+:: ============================================================
+set "MAJOR=0"
+set "MINOR=0"
+for /f "tokens=2 delims=[]" %%v in ('ver') do for /f "tokens=2" %%n in ("%%v") do for /f "tokens=1,2 delims=." %%x in ("%%n") do (
+    set "MAJOR=%%x"
+    set "MINOR=%%y"
+)
+
+:: Arquivo onde fica a mensagem real do netsh, para mostrar se der erro
+set "LOG=%TEMP%\fixaip_netsh.log"
 
 :: Numero maximo de IPs secundarios que o programa aceita
 set "MAX_AUX=10"
 
+:: MODERNO = Windows 10/11 -> cores, PowerShell e CHOICE
+set "MODERNO=0"
+if %MAJOR% GEQ 10 set "MODERNO=1"
+
+:: validate=no so existe do Vista em diante (no XP da erro)
+::   Vista (6.0) NAO aceita validate=no -> so a partir do 7 (6.1)
+::   Sem validate=no o 7/8/10/11 testam o DNS e falham se ele nao responder.
+set "VALIDA="
+if %MAJOR% GEQ 7 set "VALIDA=validate=no"
+if %MAJOR%==6 if %MINOR% GEQ 1 set "VALIDA=validate=no"
+
+:: Cores so no 10/11. No XP as variaveis ficam vazias e o texto sai normal.
+if "%MODERNO%"=="1" (
+    for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1) do rem"') do set "ESC=%%b"
+)
+setlocal EnableDelayedExpansion
+if "%MODERNO%"=="1" (
+    set "AM=!ESC![93m"
+    set "VD=!ESC![92m"
+    set "VM=!ESC![91m"
+    set "CI=!ESC![96m"
+    set "RS=!ESC![0m"
+)
+
 :: ============================================================
-:: Precisa ser administrador
+:: Precisa ser administrador (fsutil funciona do XP ao 11)
 :: ============================================================
-net session >nul 2>&1
-if %errorlevel% neq 0 (
+fsutil dirty query %SystemDrive% >nul 2>&1
+if errorlevel 1 (
     call :cabecalho "ATENCAO"
     echo %VM%Este programa precisa ser executado como ADMINISTRADOR.%RS%
     echo.
     echo Como fazer:
     echo   1. Feche esta janela
     echo   2. Clique com o botao DIREITO no arquivo .bat
-    echo   3. Escolha "Executar como administrador"
+    if "%MODERNO%"=="1" (
+        echo   3. Escolha "Executar como administrador"
+    ) else (
+        echo   3. Escolha "Executar como..." e use um usuario Administrador
+    )
     echo.
     pause
     exit /b
@@ -38,17 +71,14 @@ call :cabecalho "PASSO 1 de 4 - Escolha a conexao de rede"
 echo Estas sao as conexoes de rede deste computador:
 echo.
 set N=0
-for /f "tokens=1,* delims=|" %%a in ('powershell -NoProfile -Command "Get-NetAdapter | Sort-Object Name | ForEach-Object { $_.Name + '|' + $_.Status }"') do (
-    set /a N+=1
-    set "CON_!N!=%%a"
-    if /i "%%b"=="Up" (
-        echo    [!N!] %%a   - %VD%CONECTADA%RS%
-    ) else (
-        echo    [!N!] %%a   - %AM%sem conexao%RS%
-    )
+if "%MODERNO%"=="1" (
+    call :listaModerno
+) else (
+    call :listaXP
 )
 if %N%==0 (
     echo %VM%Nenhuma conexao encontrada automaticamente.%RS%
+    set "NOME_CONEXAO="
     set /p "NOME_CONEXAO=Digite o nome exato da conexao - ex: Ethernet: "
     if not defined NOME_CONEXAO goto passo1
     goto lerConfig
@@ -73,7 +103,11 @@ goto passo1
 set "IP_ATUAL="
 set "MASC_ATUAL="
 set "GW_ATUAL="
-for /f "delims=" %%a in ('powershell -NoProfile -Command "$a='%NOME_CONEXAO%'; $c=Get-NetIPConfiguration -InterfaceAlias $a -EA 0; $i=$c.IPv4Address | Select-Object -First 1; $g=$c.IPv4DefaultGateway | Select-Object -First 1; if($i){ 'IP_ATUAL='+$i.IPAddress; $p=$i.PrefixLength; 'MASC_ATUAL='+((0..3 | ForEach-Object { $b=[math]::Min(8,[math]::Max(0,$p-8*$_)); 256-[math]::Pow(2,8-$b) }) -join '.') }; if($g){ 'GW_ATUAL='+$g.NextHop }"') do set "%%a"
+if "%MODERNO%"=="1" (
+    call :configModerno
+) else (
+    call :configXP
+)
 
 :: ============================================================
 :: PASSO 2 - IP fixo, mascara e gateway
@@ -95,13 +129,14 @@ if not defined IP_PRINCIPAL (
     pause
     goto passo2
 )
-call :validaIP "%IP_PRINCIPAL%" || goto passo2
+call :validaIP "%IP_PRINCIPAL%"
+if errorlevel 1 goto passo2
 
 :: So testa se o IP esta em uso quando for diferente do atual
 if "%IP_PRINCIPAL%"=="%IP_ATUAL%" goto mascara
 echo Verificando se o IP %IP_PRINCIPAL% ja esta em uso na rede...
-ping -4 -n 1 -w 1000 %IP_PRINCIPAL% | findstr /i "TTL" >nul
-if %errorlevel%==0 (
+ping -n 1 -w 1000 %IP_PRINCIPAL% | findstr /i "TTL" >nul
+if not errorlevel 1 (
     echo.
     echo %VM%O IP %IP_PRINCIPAL% ja esta sendo usado por outro aparelho.%RS%
     echo Escolha outro IP.
@@ -117,7 +152,8 @@ if defined MASC_ATUAL set "PADRAO=%MASC_ATUAL%"
 set "MASCARA_PRINCIPAL="
 set /p "MASCARA_PRINCIPAL=%AM%>%RS% Mascara [ENTER = %PADRAO%]: "
 if not defined MASCARA_PRINCIPAL set "MASCARA_PRINCIPAL=%PADRAO%"
-call :validaIP "%MASCARA_PRINCIPAL%" || goto mascara
+call :validaIP "%MASCARA_PRINCIPAL%"
+if errorlevel 1 goto mascara
 
 :gateway
 echo.
@@ -133,7 +169,8 @@ if not defined GATEWAY_PRINCIPAL (
     echo %VM%O gateway e obrigatorio.%RS%
     goto gateway
 )
-call :validaIP "%GATEWAY_PRINCIPAL%" || goto gateway
+call :validaIP "%GATEWAY_PRINCIPAL%"
+if errorlevel 1 goto gateway
 
 :: ============================================================
 :: PASSO 3 - DNS
@@ -157,34 +194,36 @@ call :cabecalho "PASSO 4 de 4 - IPs para comunicar com a catraca"
 echo %CI%Se a catraca ja esta na mesma rede do computador, responda N.%RS%
 echo Voce pode adicionar mais de um IP, um para cada rede de catraca.
 echo.
-choice /c SN /n /m "Adicionar IP da catraca? [S] Sim  [N] Nao: "
-if errorlevel 2 (
+call :perguntar "SN" "Adicionar IP da catraca? [S] Sim  [N] Nao: "
+if /i "%RESP%"=="N" (
     set "OP=N"
     goto resumo
 )
 set "OP=S"
 
-:: ---------- Loop de entrada dos IPs secundarios ----------
 :addAux
 set /a PROX=NAUX+1
-call :cabecalho "PASSO 4 de 4 - IP da catraca numero !PROX!"
-if !NAUX! gtr 0 (
+call :cabecalho "PASSO 4 de 4 - IP da catraca numero %PROX%"
+if %NAUX% GTR 0 (
     echo IPs ja adicionados:
-    for /l %%i in (1,1,!NAUX!) do echo    %VD%!AUX_%%i!%RS% / !MASCAUX_%%i!
+    for /l %%i in (1,1,%NAUX%) do echo    %VD%!AUX_%%i!%RS% / !MASCAUX_%%i!
     echo.
 )
 set "TMP_IP="
-if !NAUX!==0 (
+if %NAUX%==0 (
     set /p "TMP_IP=%AM%>%RS% IP secundario [ENTER = 192.168.20.1]: "
-    if not defined TMP_IP set "TMP_IP=192.168.20.1"
 ) else (
-    set /p "TMP_IP=%AM%>%RS% IP secundario numero !PROX!: "
-    if not defined TMP_IP goto pergUltimo
+    set /p "TMP_IP=%AM%>%RS% IP secundario numero %PROX% [ENTER = terminar]: "
 )
-call :validaIP "!TMP_IP!" || goto addAux
+if not defined TMP_IP (
+    if %NAUX%==0 set "TMP_IP=192.168.20.1"
+)
+if not defined TMP_IP goto resumo
+call :validaIP "%TMP_IP%"
+if errorlevel 1 goto addAux
 
 :: Nao pode repetir o IP principal
-if /i "!TMP_IP!"=="%IP_PRINCIPAL%" (
+if "%TMP_IP%"=="%IP_PRINCIPAL%" (
     echo.
     echo %VM%Esse IP e o mesmo do IP fixo do computador.%RS%
     pause
@@ -193,7 +232,7 @@ if /i "!TMP_IP!"=="%IP_PRINCIPAL%" (
 
 :: Nao pode repetir um IP secundario ja informado
 set "DUP="
-for /l %%i in (1,1,!NAUX!) do if /i "!AUX_%%i!"=="!TMP_IP!" set "DUP=1"
+for /l %%i in (1,1,%NAUX%) do if "!AUX_%%i!"=="%TMP_IP%" set "DUP=1"
 if defined DUP (
     echo.
     echo %VM%Esse IP ja foi adicionado na lista.%RS%
@@ -201,49 +240,28 @@ if defined DUP (
     goto addAux
 )
 
-:: Aviso de IP em uso - nao bloqueia, porque ao rodar o programa de novo
-:: o proprio computador pode responder nesse IP
-echo Verificando se o IP !TMP_IP! ja esta em uso na rede...
-ping -4 -n 1 -w 1000 !TMP_IP! | findstr /i "TTL" >nul
-if !errorlevel!==0 (
-    echo.
-    echo %AM%AVISO: alguem respondeu no IP !TMP_IP!.%RS%
-    echo Pode ser outro aparelho, ou este proprio computador se voce
-    echo ja rodou este programa antes.
-    echo.
-    choice /c SN /n /m "Usar esse IP mesmo assim? [S] Sim  [N] Escolher outro: "
-    if errorlevel 2 goto addAux
-) else (
-    echo %VD%OK, IP livre.%RS%
-)
-
 :auxMascara
-echo.
 set "TMP_MASC="
 set /p "TMP_MASC=%AM%>%RS% Mascara       [ENTER = 255.255.255.0]: "
 if not defined TMP_MASC set "TMP_MASC=255.255.255.0"
-call :validaIP "!TMP_MASC!" || goto auxMascara
+call :validaIP "%TMP_MASC%"
+if errorlevel 1 goto auxMascara
 
-:: Guarda na lista
 set /a NAUX+=1
-set "AUX_!NAUX!=!TMP_IP!"
-set "MASCAUX_!NAUX!=!TMP_MASC!"
+set "AUX_%NAUX%=%TMP_IP%"
+set "MASCAUX_%NAUX%=%TMP_MASC%"
 echo.
-echo %VD%Adicionado: !TMP_IP! / !TMP_MASC!%RS%
+echo %VD%Adicionado: %TMP_IP% / %TMP_MASC%%RS%
 
-:: Chegou no limite?
-if !NAUX! geq %MAX_AUX% (
+if %NAUX% GEQ %MAX_AUX% (
     echo.
     echo %AM%Limite de %MAX_AUX% IPs secundarios atingido.%RS%
     pause
     goto resumo
 )
-
-:pergUltimo
 echo.
-choice /c SN /n /m "Adicionar OUTRO IP para a catraca? [S] Sim  [N] Nao, continuar: "
-if errorlevel 2 goto resumo
-goto addAux
+call :perguntar "SN" "Adicionar OUTRO IP para a catraca? [S] Sim  [N] Nao, continuar: "
+if /i "%RESP%"=="S" goto addAux
 
 :: ============================================================
 :: RESUMO
@@ -256,16 +274,17 @@ echo    Mascara ............ %CI%%MASCARA_PRINCIPAL%%RS%
 echo    Gateway ............ %CI%%GATEWAY_PRINCIPAL%%RS%
 echo    DNS primario ....... %CI%%DNS_PRIMARIO%%RS%
 echo    DNS secundario ..... %CI%%DNS_SECUNDARIO%%RS%
+if "%NAUX%"=="0" set "OP=N"
 if "%OP%"=="S" (
-    echo    IPs da catraca ..... %CI%!NAUX! no total%RS%
-    for /l %%i in (1,1,!NAUX!) do echo                         %CI%!AUX_%%i! / !MASCAUX_%%i!%RS%
+    echo    IPs da catraca ..... %CI%%NAUX% no total%RS%
+    for /l %%i in (1,1,%NAUX%) do echo                         %CI%!AUX_%%i! / !MASCAUX_%%i!%RS%
 ) else (
-    echo    IPs da catraca ..... nao adicionar
+    echo    IP da catraca ...... nao adicionar
 )
 echo.
-choice /c SNV /n /m "Esta tudo certo? [S] Aplicar  [V] Voltar e corrigir  [N] Cancelar: "
-if errorlevel 3 goto passo2
-if errorlevel 2 (
+call :perguntar "SNV" "Esta tudo certo? [S] Aplicar  [V] Voltar e corrigir  [N] Cancelar: "
+if /i "%RESP%"=="V" goto passo2
+if /i "%RESP%"=="N" (
     echo.
     echo Cancelado. Nada foi alterado.
     pause
@@ -273,62 +292,88 @@ if errorlevel 2 (
 )
 
 :: ============================================================
-:: APLICAR
+:: APLICAR (sintaxe do netsh aceita do XP ao 11)
 :: ============================================================
 echo.
 echo Aplicando configuracao, aguarde...
 echo.
 
 echo  - Definindo IP fixo, mascara e gateway...
-netsh interface ip set address "%NOME_CONEXAO%" static %IP_PRINCIPAL% %MASCARA_PRINCIPAL% %GATEWAY_PRINCIPAL% >nul
-if %errorlevel% neq 0 (
+netsh interface ip set address name="%NOME_CONEXAO%" source=static addr=%IP_PRINCIPAL% mask=%MASCARA_PRINCIPAL% gateway=%GATEWAY_PRINCIPAL% gwmetric=1 >"%LOG%" 2>&1
+if errorlevel 1 (
     set "ERRO=Falha ao definir o IP fixo."
     goto endERROR
 )
 
 echo  - Definindo DNS primario...
-netsh interface ip set dns "%NOME_CONEXAO%" static %DNS_PRIMARIO% validate=no >nul
-if %errorlevel% neq 0 (
+netsh interface ip set dns name="%NOME_CONEXAO%" source=static addr=%DNS_PRIMARIO% register=primary %VALIDA% >"%LOG%" 2>&1
+if errorlevel 1 (
     set "ERRO=Falha ao definir o DNS primario."
     goto endERROR
 )
 
+if "%DNS_SECUNDARIO%"=="%DNS_PRIMARIO%" goto pulaDns2
 echo  - Definindo DNS secundario...
-netsh interface ip add dns "%NOME_CONEXAO%" %DNS_SECUNDARIO% index=2 validate=no >nul
-if %errorlevel% neq 0 (
+netsh interface ip add dns name="%NOME_CONEXAO%" addr=%DNS_SECUNDARIO% index=2 %VALIDA% >"%LOG%" 2>&1
+if errorlevel 1 (
     set "ERRO=Falha ao definir o DNS secundario."
     goto endERROR
 )
 
-if "%OP%"=="N" goto endFim
 
-:: Adiciona todos os IPs secundarios da lista
-for /l %%i in (1,1,!NAUX!) do (
-    echo  - Adicionando IP da catraca !AUX_%%i! ...
-    netsh interface ip add address "%NOME_CONEXAO%" !AUX_%%i! !MASCAUX_%%i! >nul
-    if !errorlevel! neq 0 (
-        set "ERRO=Falha ao adicionar o IP da catraca !AUX_%%i!."
-        goto endERROR
-    )
+:pulaDns2
+if "%OP%"=="N" goto verificar
+
+set "IDX_AUX=0"
+:proxAux
+set /a IDX_AUX+=1
+if %IDX_AUX% GTR %NAUX% goto verificar
+set "A_IP=!AUX_%IDX_AUX%!"
+set "A_MASC=!MASCAUX_%IDX_AUX%!"
+echo  - Adicionando IP da catraca %A_IP% ...
+netsh interface ip add address name="%NOME_CONEXAO%" addr=%A_IP% mask=%A_MASC% >"%LOG%" 2>&1
+if errorlevel 1 (
+    set "ERRO=Falha ao adicionar o IP da catraca %A_IP%."
+    goto endERROR
+)
+goto proxAux
+
+:: Confere se o IP realmente ficou na placa (algumas versoes do netsh
+:: retornam sucesso mesmo quando nao aplicam)
+:verificar
+echo  - Conferindo se o IP foi aplicado...
+ping -n 4 127.0.0.1 >nul
+netsh interface ip show config name="%NOME_CONEXAO%" >"%LOG%" 2>&1
+findstr /c:"%IP_PRINCIPAL%" "%LOG%" >nul
+if errorlevel 1 (
+    set "ERRO=O Windows nao manteve o IP %IP_PRINCIPAL% na conexao."
+    goto endERROR
 )
 
 :endFim
+if not "%MODERNO%"=="1" color 0A
 echo.
 echo %VD%============================================================%RS%
-echo %VD%   PRONTO! Configuracao concluida com sucesso.%RS%
+echo %VD%   PRONTO. Configuracao concluida com sucesso.%RS%
 echo %VD%============================================================%RS%
 echo.
 pause
 exit /b
 
 :endERROR
+if not "%MODERNO%"=="1" color 0C
 echo.
 echo %VM%ERRO: %ERRO%%RS%
 echo.
+if exist "%LOG%" (
+    echo Mensagem do Windows:
+    type "%LOG%"
+    echo.
+)
 echo Para o computador nao ficar sem internet, a conexao foi
 echo devolvida para o modo automatico - DHCP.
 netsh interface ip set address name="%NOME_CONEXAO%" source=dhcp >nul
-netsh interface ip set dnsservers name="%NOME_CONEXAO%" source=dhcp >nul
+netsh interface ip set dns name="%NOME_CONEXAO%" source=dhcp >nul
 echo %AM%DHCP ATIVADO%RS%
 echo.
 echo Confira os dados digitados e rode o programa de novo.
@@ -348,9 +393,94 @@ echo %AM%%~1%RS%
 echo.
 exit /b
 
+:: ---------- Lista de conexoes: Windows 10/11 (PowerShell) ----------
+:listaModerno
+for /f "tokens=1,* delims=|" %%a in ('powershell -NoProfile -Command "Get-NetAdapter | Sort-Object Name | ForEach-Object { $_.Name + '|' + $_.Status }"') do (
+    set /a N+=1
+    set "CON_!N!=%%a"
+    if /i "%%b"=="Up" (
+        echo    [!N!] %%a   - %VD%CONECTADA%RS%
+    ) else (
+        echo    [!N!] %%a   - %AM%sem conexao%RS%
+    )
+)
+exit /b
+
+:: ---------- Lista de conexoes: XP/7/8 (netsh) ----------
+:listaXP
+for /f tokens^=2^ delims^=^" %%a in ('netsh interface ip show config 2^>nul') do (
+    set "NM=%%a"
+    if /i not "!NM:~0,8!"=="Loopback" (
+        set /a N+=1
+        set "CON_!N!=%%a"
+        echo    [!N!] %%a
+    )
+)
+exit /b
+
+:: ---------- IP/mascara/gateway atuais: Windows 10/11 ----------
+:configModerno
+for /f "delims=" %%a in ('powershell -NoProfile -Command "$a='%NOME_CONEXAO%'; $c=Get-NetIPConfiguration -InterfaceAlias $a -EA 0; $i=$c.IPv4Address | Select-Object -First 1; $g=$c.IPv4DefaultGateway | Select-Object -First 1; if($i){ 'IP_ATUAL='+$i.IPAddress; $p=$i.PrefixLength; 'MASC_ATUAL='+((0..3 | ForEach-Object { $b=[math]::Min(8,[math]::Max(0,$p-8*$_)); 256-[math]::Pow(2,8-$b) }) -join '.') }; if($g){ 'GW_ATUAL='+$g.NextHop }"') do set "%%a"
+exit /b
+
+:: ---------- IP/mascara/gateway atuais: XP/7/8 (netsh) ----------
+:configXP
+for /f "tokens=1,* delims=:" %%a in ('netsh interface ip show config name^="%NOME_CONEXAO%" 2^>nul') do (
+    call :guardaValor "%%a" "%%b"
+)
+exit /b
+
+:guardaValor
+set "ROT=%~1"
+set "VAL=%~2"
+if not defined VAL exit /b
+set "VAL=%VAL:(= %"
+set "VAL=%VAL:)= %"
+for %%w in (%VAL%) do call :testaValor "%%w"
+exit /b
+
+:testaValor
+echo %~1| findstr /r "^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
+if errorlevel 1 exit /b
+echo %ROT%| findstr /c:"ateway" >nul
+if not errorlevel 1 (
+    if not defined GW_ATUAL set "GW_ATUAL=%~1"
+    exit /b
+)
+set "TMPV=%~1"
+if "%TMPV:~0,4%"=="255." (
+    if not defined MASC_ATUAL set "MASC_ATUAL=%~1"
+    exit /b
+)
+echo %ROT%| findstr /c:"IP" >nul
+if not errorlevel 1 (
+    if not defined IP_ATUAL set "IP_ATUAL=%~1"
+)
+exit /b
+
+:: ---------- Pergunta de uma letra ----------
+:: Uso: call :perguntar "SNV" "mensagem"  -> resposta em RESP
+:: 10/11 usa CHOICE (sem ENTER). XP nao tem CHOICE, entao usa SET /P.
+:perguntar
+set "RESP="
+set "OPC=%~1"
+if not "%MODERNO%"=="1" goto perguntarXP
+choice /c %OPC% /n /m "%~2"
+set /a IDX=%errorlevel%-1
+set "RESP=!OPC:~%IDX%,1!"
+exit /b
+:perguntarXP
+set "RESP="
+set /p "RESP=%~2"
+if not defined RESP goto perguntarXP
+if not "%RESP:~1%"=="" goto perguntarXP
+echo %OPC%| findstr /i /c:"%RESP%" >nul
+if errorlevel 1 goto perguntarXP
+exit /b
+
 :validaIP
 echo %~1| findstr /r "^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo %VM%"%~1" nao e um endereco valido. Use o formato 192.168.0.10%RS%
     pause
     exit /b 1

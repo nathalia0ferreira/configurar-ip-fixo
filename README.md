@@ -13,8 +13,8 @@ passo guiado, com validação e volta automática para DHCP se algo der errado.
 
 O script conduz a configuração em 4 passos e só aplica depois de uma confirmação:
 
-1. **Conexão de rede** — lista os adaptadores do computador (via PowerShell) e
-   mostra quais estão conectados.
+1. **Conexão de rede** — lista os adaptadores do computador (via PowerShell no
+   Windows 10/11 e via `netsh` no XP, 7 e 8).
 2. **IP fixo** — lê o IP, a máscara e o gateway atuais e sugere esses valores
    como ponto de partida.
 3. **DNS** — primário e secundário.
@@ -31,7 +31,9 @@ Antes de aplicar, exibe um **resumo** com todas as opções:
 - Calcula a máscara a partir da configuração atual do adaptador.
 - Aplica tudo com `netsh` e, **se qualquer etapa falhar, devolve a conexão para
   DHCP**, evitando deixar o computador sem rede.
-- Interface colorida no terminal, com mensagens em português.
+- Confere no final se o IP realmente ficou na placa e mostra a mensagem do
+  Windows quando algo falha.
+- Interface colorida no terminal (Windows 10/11), com mensagens em português.
 
 ## Como usar
 
@@ -39,7 +41,8 @@ Antes de aplicar, exibe um **resumo** com todas as opções:
 2. Clique com o botão direito e escolha **Executar como administrador**.
 3. Siga os passos na tela.
 
-> Requer Windows 10 ou superior (usa `netsh` e cmdlets de rede do PowerShell).
+> Funciona no Windows XP, 7, 8, 10 e 11. No 10/11 usa PowerShell e cores;
+> nas versões antigas usa apenas `netsh`.
 
 ## Tecnologias
 
@@ -48,3 +51,10 @@ Antes de aplicar, exibe um **resumo** com todas as opções:
 ## Licença
 
 [MIT](LICENSE)
+
+## Contribuindo
+
+As mensagens de commit deste projeto seguem o padrão
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+Veja [CONTRIBUTING.md](CONTRIBUTING.md) para os tipos, escopos e exemplos
+usados aqui.
